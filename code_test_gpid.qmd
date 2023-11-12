@@ -4,23 +4,164 @@ format: html
 editor: visual
 ---
 
+```{r, warning=FALSE,message=F}
+
+rm(list = ls())
+
+#
+library(tidyverse)
+library(ggplot2)
+library(knitr)
+library(rmarkdown)
+
+
+tag      <- "202311081903"
+base_url <- "https://github.com/randrescastaneda/pub_data/raw/"
+data_url <- paste0(base_url, tag, "/data/Rtest1/")
+
+
+wdi <-
+  readr::read_rds(paste0(data_url, "wdi_in1.Rds"))
+```
 ## 1. Summary statistics of gdp per capita by region
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
 
-## Running Code
+```{r, warning=FALSE,message=F}
 
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-
-```{r}
-1 + 1
+wdi %>% group_by(region,date) %>% 
+  summarise(across(gdp,
+                   list(mean= ~ mean(.,na.rm=T),
+                        sd= ~ sd(.,na.rm=T),
+                        min= ~ min(.,na.rm=T),
+                        max= ~ max(.,na.rm=T),
+                        median= ~ median(.,na.rm=T))))%>% 
+  paged_table(options=list(rows.print=10))
 ```
 
-You can add options to executable code like this
+## 2. Aggregate stats
 
-```{r}
-#| echo: false
-2 * 2
+```{r,warning=FALSE,message=F}
+cols = c("pop","lifeex","gdp","pov_intl")
+
+wdi %>% group_by(region,date) %>% 
+  summarise(across(cols,
+                   list(mean= ~ mean(.,na.rm=T),
+                        sd= ~ sd(.,na.rm=T),
+                        min= ~ min(.,na.rm=T),
+                        max= ~ max(.,na.rm=T),
+                        median= ~ median(.,na.rm=T)))) %>% 
+  pivot_longer(cols=-c(region,date),
+               names_to=c(".value","estimate"),
+               names_pattern = "(.*)_(.*)")%>% 
+  paged_table(options=list(rows.print=10))
+
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+## 3. Find outliers
+
+```{r,warning=FALSE,message=F}
+outlier_function <- function(var_out) {
+  
+  temp_summary <- wdi %>%
+    
+    select(var_out) %>%
+    
+   summarize(
+      across(
+      var_out,
+      ~ list(mean = mean(.x, na.rm = TRUE), 
+               sd = sd(.x, na.rm = TRUE)))
+        
+      ) %>%
+    
+    pluck(1)
+  
+  
+  temp_up        <- temp_summary$mean + 2.5*temp_summary$sd
+  
+  temp_lw        <-  2.5*temp_summary$sd - temp_summary$mean
+  
+
+temp_check <- wdi %>%
+  
+  filter(
+    
+    across(
+      
+      var_out,
+      
+      ~ .x < temp_lw | .x > temp_up
+      
+    )
+    
+  )  %>%
+  mutate(issue_var=var_out) %>% 
+  rename(issue_value = var_out) %>% 
+  
+  select(
+    
+    region, date, issue_var,issue_value)
+
+return(temp_check)
+
+}
+
+
+out_gdp = outlier_function("gdp")
+out_lifeex = outlier_function("lifeex")
+out_gini = outlier_function("gini")
+
+mean_y = wdi %>% group_by(date) %>% 
+  summarise(mean_val=mean(lifeex),
+            sd_val=sd(lifeex)) %>% 
+  mutate(upb=mean_val+2.5*sd_val,
+         lwb=2.5*sd_val-mean_val)
+
+ggplot() +
+  geom_point(data=wdi,aes(x=date,y=lifeex,col=region))+
+  geom_line(data=mean_y,aes(x=date,y=mean_val))+
+  geom_ribbon(data=mean_y,aes(ymax=upb,ymin=lwb,x=date),alpha=0.2,colour=NA)
+
+```
+
+## 4. Poverty measures
+
+```{r,warning=FALSE,message=F}
+
+df <- readr::read_rds(paste0(data_url, "svy_sim_in1.Rds"))
+df_y = bind_rows(df,.id='year')
+
+tab1 = df_y %>% 
+  group_by(year) %>% 
+  summarise(headcount_215=sum(ifelse(income<2.15,1,0))/n(),
+            povgap_215=sum(ifelse(income<2.15,((2.15-income)/2.15),0))/n(),
+            povseverity_215=sum(ifelse(income<2.15,((2.15-income)/2.15)^2,0))/n(),
+            headcount_365=sum(ifelse(income<3.65,1,0))/n(),
+            povgap_365=sum(ifelse(income<3.65,((3.65-income)/3.65),0))/n(),
+            povseverity_365=sum(ifelse(income<3.65,((3.65-income)/3.65)^2,0))/n(),
+            headcount_685=sum(ifelse(income<6.85,1,0))/n(),
+            povgap_685=sum(ifelse(income<6.85,((6.85-income)/6.85),0))/n(),
+            povseverity_685=sum(ifelse(income<6.85,((6.85-income)/6.85)^2,0))/n()) %>% 
+  pivot_longer(cols=-c(year),
+               names_to=c(".value","pov_line"),
+               names_pattern = "(.*)_(.*)")
+
+ggplot(tab1,
+       aes(x=year,y=headcount,group=pov_line,colour=pov_line))+
+  geom_line()
+
+
+```
+
+## 6. Gini coefficient
+
+```{r,warning=FALSE,message=F}
+df_y = df_y %>% group_by(year) %>% 
+  mutate(id=row_number()) %>% ungroup()
+
+df_y %>% group_by(year) %>% 
+  mutate(ni=id*income) %>% 
+  summarise(gini=(2*sum(ni)/n()*sum(income))-(n()+1/n()))
+
+```
+
